@@ -1,0 +1,75 @@
+---
+- name: Деплой статического сайта из репозитория Git
+  hosts: all
+  become: yes
+  tasks:
+    - name: Исправление прерванного процесса dpkg
+      shell: dpkg --configure -a
+      async: 45
+      poll: 0
+      register: dpkg_configure
+
+    - name: Wait for dpkg --configure -a to complete
+      async_status:
+        jid: '{{ dpkg_configure.ansible_job_id }}'
+      register: job_result
+      until: job_result.finished
+      retries: 30
+      delay: 10
+
+    - name: Очистка кеша пакетов APT
+      apt:
+        autoclean: yes
+
+    - name: Удаление старых версий пакетов и зависимостей
+      apt:
+        autoremove: yes
+
+    - name: Удаление временных файлов
+      command: rm -rf /tmp/* /var/tmp/*
+
+    - name: Удаление ненужных лог-файлов
+      command: rm -f /var/log/*.log
+
+    - name: Установка зависимостей
+      apt:
+        name:
+          - git
+          - nginx
+        state: present
+        update_cache: yes
+
+    - name: Клонирование репозитория
+      git:
+        repo: https://github.com/AndreyPetrozhitskiy/SityPro.git
+        dest: /var/www/sitypro
+
+    - name: Настройка Nginx для статического сайта
+      copy:
+        dest: /etc/nginx/sites-available/sitypro
+        content: |
+          server {
+            listen 80;
+            server_name _;
+
+            location / {
+              root /var/www/sitypro;
+              index index.html;
+              try_files $uri $uri/ /index.html;
+            }
+          }
+
+    - name: Включение конфигурации Nginx
+      command: ln -s /etc/nginx/sites-available/sitypro /etc/nginx/sites-enabled/sitypro
+      args:
+        creates: /etc/nginx/sites-enabled/sitypro
+
+    - name: Удаление стандартного сайта Nginx
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Перезапуск Nginx
+      systemd:
+        name: nginx
+        state: restarted

@@ -1,0 +1,33 @@
+---
+- name: Управление службами
+  hosts: all
+  become: yes
+  tasks:
+    - name: Исправление прерванного процесса dpkg
+      shell: dpkg --configure -a
+      async: 45
+      poll: 0
+      register: dpkg_configure
+
+    - name: Wait for dpkg --configure -a to complete
+      async_status:
+        jid: '{{ dpkg_configure.ansible_job_id }}'
+      register: job_result
+      until: job_result.finished
+      retries: 30
+      delay: 10
+
+    - name: Запуск сервиса Nginx
+      systemd:
+        name: nginx
+        state: started
+
+    - name: Остановка сервиса Nginx
+      systemd:
+        name: nginx
+        state: stopped
+
+    - name: Перезапуск сервиса Nginx
+      systemd:
+        name: nginx
+        state: restarted

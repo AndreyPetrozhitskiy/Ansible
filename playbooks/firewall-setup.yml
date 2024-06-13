@@ -1,0 +1,45 @@
+---
+- name: Настройка файрвола
+  hosts: all
+  become: yes
+  tasks:
+    - name: Исправление прерванного процесса dpkg
+      shell: dpkg --configure -a
+      async: 45
+      poll: 0
+      register: dpkg_configure
+
+    - name: Wait for dpkg --configure -a to complete
+      async_status:
+        jid: '{{ dpkg_configure.ansible_job_id }}'
+      register: job_result
+      until: job_result.finished
+      retries: 30
+      delay: 10
+
+    - name: Установка UFW
+      apt:
+        name: ufw
+        state: present
+        update_cache: yes
+
+    - name: Разрешение SSH
+      ufw:
+        rule: allow
+        name: OpenSSH
+
+    - name: Разрешение HTTP
+      ufw:
+        rule: allow
+        port: '80'
+        proto: tcp
+
+    - name: Разрешение HTTP на порту 9090
+      ufw:
+        rule: allow
+        port: '9090'
+        proto: tcp
+
+    - name: Включение UFW
+      ufw:
+        state: enabled

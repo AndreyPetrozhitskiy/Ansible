@@ -1,0 +1,37 @@
+---
+- name: Настройка SSH
+  hosts: all
+  become: yes
+  tasks:
+    - name: Исправление прерванного процесса dpkg
+      shell: dpkg --configure -a
+      async: 45
+      poll: 0
+      register: dpkg_configure
+
+    - name: Wait for dpkg --configure -a to complete
+      async_status:
+        jid: '{{ dpkg_configure.ansible_job_id }}'
+      register: job_result
+      until: job_result.finished
+      retries: 30
+      delay: 10
+
+    - name: Изменить порт SSH на 228
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?Port '
+        line: 'Port 228'
+        state: present
+
+    # - name: Отключить авторизацию через root
+    #   lineinfile:
+    #     path: /etc/ssh/sshd_config
+    #     regexp: '^#?PermitRootLogin '
+    #     line: 'PermitRootLogin no'
+    #     state: present
+
+    - name: Перезапустить SSH сервис для применения изменений
+      systemd:
+        name: ssh
+        state: restarted

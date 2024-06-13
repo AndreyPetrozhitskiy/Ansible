@@ -1,0 +1,153 @@
+---
+- name: Установка и настройка PostgreSQL на Ubuntu
+  hosts: all
+  become: true
+  vars:
+    postgres_version: '12'
+    db_user: 'myuser'
+    db_password: 'mypassword'
+    db_name: 'mydatabase'
+    postgres_password: 'new_postgres_password'
+    ansible_os_user: 'root' # Имя пользователя операционной системы, под которым работает Ansible
+
+  tasks:
+    - name: Исправление прерванного процесса dpkg
+      shell: dpkg --configure -a
+      async: 45
+      poll: 0
+      register: dpkg_configure
+
+    - name: Wait for dpkg --configure -a to complete
+      async_status:
+        jid: '{{ dpkg_configure.ansible_job_id }}'
+      register: job_result
+      until: job_result.finished
+      retries: 30
+      delay: 10
+
+    - name: Очистка кеша пакетов APT
+      apt:
+        autoclean: yes
+
+    - name: Удаление старых версий пакетов и зависимостей
+      apt:
+        autoremove: yes
+
+    - name: Удаление временных файлов
+      command: rm -rf /tmp/* /var/tmp/*
+
+    - name: Удаление ненужных лог-файлов
+      command: rm -f /var/log/*.log
+
+    - name: Установка необходимых пакетов для работы с репозиторием PostgreSQL
+      apt:
+        name:
+          - wget
+          - ca-certificates
+          - gnupg
+          - python3-psycopg2
+        state: present
+        update_cache: yes
+
+    - name: Добавление ключа репозитория PostgreSQL
+      apt_key:
+        url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        state: present
+
+    - name: Добавление репозитория PostgreSQL
+      apt_repository:
+        repo: deb http://apt.postgresql.org/pub/repos/apt focal-pgdg main
+        state: present
+        update_cache: yes
+
+    - name: Установка PostgreSQL и дополнительных пакетов
+      apt:
+        name:
+          - 'postgresql-{{ postgres_version }}'
+          - 'postgresql-contrib-{{ postgres_version }}'
+        state: present
+        update_cache: yes
+
+    - name: Убедиться, что PostgreSQL запущен и включен в автозагрузку
+      systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Настройка прослушиваемых адресов в postgresql.conf
+      lineinfile:
+        path: /etc/postgresql/{{ postgres_version }}/main/postgresql.conf
+        regexp: '^#listen_addresses'
+        line: "listen_addresses = '*'"
+        state: present
+      notify:
+        - restart postgresql
+
+    - name: Изменение метода аутентификации для пользователя postgres в pg_hba.conf
+      lineinfile:
+        path: /etc/postgresql/{{ postgres_version }}/main/pg_hba.conf
+        regexp: '^local\s+all\s+all\s+peer$'
+        line: 'local   all             all                                     peer map=foransible'
+        state: present
+      notify:
+        - restart postgresql
+
+    - name: Добавление сопоставления пользователей в pg_ident.conf
+      blockinfile:
+        path: /etc/postgresql/{{ postgres_version }}/main/pg_ident.conf
+        block: |
+          # MAPNAME       SYSTEM-USERNAME         PG-USERNAME
+          foransible      {{ ansible_os_user }}   postgres
+          foransible      postgres                postgres
+        marker: '# {mark} ANSIBLE MANAGED BLOCK'
+      notify:
+        - restart postgresql
+
+    - name: Перезапуск PostgreSQL для применения изменений
+      systemd:
+        name: postgresql
+        state: restarted
+
+    - name: Установить пароль для пользователя postgres
+      postgresql_user:
+        name: postgres
+        password: '{{ postgres_password }}'
+        role_attr_flags: LOGIN
+        state: present
+        login_host: localhost
+        login_user: postgres
+        login_password: '{{ postgres_password }}'
+
+    - name: Проверка конфигурации pg_hba.conf
+      shell: cat /etc/postgresql/{{ postgres_version }}/main/pg_hba.conf
+      register: pg_hba_config
+
+    - name: Создание пользователя PostgreSQL
+      postgresql_user:
+        db: postgres
+        name: '{{ db_user }}'
+        password: '{{ db_password }}'
+        role_attr_flags: CREATEDB,LOGIN
+        state: present
+        login_host: localhost
+        login_user: postgres
+        login_password: '{{ postgres_password }}'
+
+    - name: Создание базы данных
+      postgresql_db:
+        name: '{{ db_name }}'
+        owner: '{{ db_user }}'
+        encoding: 'UTF8'
+        lc_collate: 'en_US.UTF-8'
+        lc_ctype: 'en_US.UTF-8'
+        template: 'template0'
+        state: present
+        login_host: localhost
+        login_user: postgres
+        login_password: '{{ postgres_password }}'
+
+  handlers:
+    - name: restart postgresql
+      service:
+        name: postgresql
+        state: restarted
